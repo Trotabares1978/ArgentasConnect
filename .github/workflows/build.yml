@@ -38,6 +38,9 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
+      - name: Install ImageMagick
+        run: sudo apt-get update && sudo apt-get install -y imagemagick
+
       - name: Install Argentas native plugin
         run: node scripts/prepare-android.mjs
 
