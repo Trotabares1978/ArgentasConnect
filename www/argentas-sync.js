@@ -192,30 +192,31 @@ function removeOldInjectedIndicator() {
 function makeIndicator() {
   const indicator = document.createElement('div');
 
-  indicator.className =
-    'argentas-network-status';
+  indicator.className = 'argentas-network-status';
 
   Object.assign(indicator.style, {
+    position: 'fixed',
+    top: '8px',
+    right: '8px',
+    zIndex: '2147483647',
     display: 'inline-flex',
     alignItems: 'center',
-    justifyContent: 'flex-end',
     gap: '4px',
-    minHeight: '11px',
+    padding: '3px 6px',
+    borderRadius: '999px',
+    background: 'rgba(0,0,0,.72)',
     fontSize: '8px',
     lineHeight: '1',
     fontWeight: '900',
     letterSpacing: '.12em',
     whiteSpace: 'nowrap',
     userSelect: 'none',
-    pointerEvents: 'none'
+    pointerEvents: 'none',
+    boxSizing: 'border-box'
   });
 
   const dot = document.createElement('span');
-
-  dot.setAttribute(
-    'data-argentas-dot',
-    '1'
-  );
+  dot.setAttribute('data-argentas-dot', '1');
 
   Object.assign(dot.style, {
     width: '6px',
@@ -226,81 +227,22 @@ function makeIndicator() {
   });
 
   const label = document.createElement('span');
-
-  label.setAttribute(
-    'data-argentas-label',
-    '1'
-  );
-
-  label.textContent = state.connected
-    ? 'CONECTADO'
-    : 'DESCONECTADO';
+  label.setAttribute('data-argentas-label', '1');
 
   indicator.append(dot, label);
-
   return indicator;
 }
 
 function installIndicator() {
-  const existing = [
-    ...document.querySelectorAll(
-      '.argentas-network-status'
-    )
-  ];
+  let indicator = document.querySelector('.argentas-network-status');
 
-  const cajas = findOriginalHeaderCajas();
-
-  if (!cajas.length) {
-    return existing.length > 0;
-  }
-
-  for (const caja of cajas) {
-    if (!caja.parentElement) continue;
-
-    if (
-      caja.parentElement.classList?.contains(
-        'argentas-network-status-wrap'
-      )
-    ) {
-      continue;
-    }
-
-    const parent = caja.parentElement;
-
-    const wrapper =
-      document.createElement('div');
-
-    wrapper.className =
-      'argentas-network-status-wrap';
-
-    Object.assign(wrapper.style, {
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'flex-end',
-      justifyContent: 'center',
-      gap: '2px',
-      flexShrink: '0'
-    });
-
-    const indicator = makeIndicator();
-
-    parent.insertBefore(wrapper, caja);
-
-    wrapper.append(
-      indicator,
-      caja
-    );
+  if (!indicator) {
+    indicator = makeIndicator();
+    document.body.appendChild(indicator);
   }
 
   setConnected(state.connected);
-
   return true;
-}
-
-function reloadAfterRemote() {
-  setTimeout(() => {
-    location.reload();
-  }, 120);
 }
 
 async function boot() {
@@ -351,10 +293,25 @@ async function boot() {
 
             state.applying = false;
 
+            // One-way response: the peer receives our current snapshot
+            // as "sync". This prevents an endless hello <-> hello loop.
             send({
-              type: 'hello',
+              type: 'sync',
               data: snapshot()
             });
+
+            reloadAfterRemote();
+
+          } else if (
+            message.type === 'sync'
+          ) {
+            state.applying = true;
+
+            mergeSnapshot(
+              message.data || {}
+            );
+
+            state.applying = false;
 
             reloadAfterRemote();
 
@@ -415,14 +372,23 @@ localStorage.setItem = (
 // asincrónica. Volvemos a comprobar la
 // inserción después de cada render.
 // Los indicadores originales no se modifican.
+let indicatorCheckTimer = null;
+
 const observer =
   new MutationObserver(() => {
-    installIndicator();
+    if (indicatorCheckTimer !== null) return;
+
+    indicatorCheckTimer = setTimeout(() => {
+      indicatorCheckTimer = null;
+      installIndicator();
+    }, 250);
   });
 
 function startObservers() {
   if (!document.documentElement) return;
 
+  // Watch only for enough DOM changes to recover the small overlay.
+  // The indicator itself lives directly under <body>, outside the app root.
   observer.observe(
     document.documentElement,
     {
