@@ -11,7 +11,6 @@ const targetDir = path.join(android, 'app', 'src', 'main', 'java', 'com', 'argen
 fs.mkdirSync(targetDir, { recursive: true });
 fs.copyFileSync(native, path.join(targetDir, 'ArgentasSyncPlugin.java'));
 
-// Nearby Connections 19.5.0 requires Android API 24+ at runtime/build time.
 const variablesGradle = path.join(android, 'variables.gradle');
 if (fs.existsSync(variablesGradle)) {
   let v = fs.readFileSync(variablesGradle, 'utf8');
@@ -21,29 +20,66 @@ if (fs.existsSync(variablesGradle)) {
 
 const resDir = path.join(android, 'app', 'src', 'main', 'res');
 if (fs.existsSync(iconSource)) {
-  for (const file of ['ic_launcher.xml', 'ic_launcher_round.xml']) {
-    const p = path.join(resDir, 'mipmap-anydpi-v26', file);
-    if (fs.existsSync(p)) fs.unlinkSync(p);
-  }
-
-  // Crop the outer 10% on each side so the Argentas artwork fills the launcher icon.
-  const croppedIcon = path.join(root, '.argentas_launcher_icon.png');
   const magick = fs.existsSync('/usr/bin/magick') ? '/usr/bin/magick' : 'convert';
+  const croppedIcon = path.join(root, '.argentas_launcher_icon.png');
+
   execFileSync(magick, [
     iconSource, '-gravity', 'center', '-crop', '80%x80%+0+0', '+repage',
     '-resize', '1024x1024!', croppedIcon
   ], { stdio: 'inherit' });
 
+  // Raster fallback for Android < 8.
   for (const density of ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi']) {
     const iconDir = path.join(resDir, 'mipmap-' + density);
     fs.mkdirSync(iconDir, { recursive: true });
-    for (const file of ['ic_launcher.png', 'ic_launcher.jpg', 'ic_launcher_round.png', 'ic_launcher_round.jpg']) {
+    for (const file of ['ic_launcher.png', 'ic_launcher_round.png', 'ic_launcher.jpg', 'ic_launcher_round.jpg']) {
       const p = path.join(iconDir, file);
       if (fs.existsSync(p)) fs.unlinkSync(p);
     }
     fs.copyFileSync(croppedIcon, path.join(iconDir, 'ic_launcher.png'));
     fs.copyFileSync(croppedIcon, path.join(iconDir, 'ic_launcher_round.png'));
   }
+
+  // Real Android adaptive icon for Android 8+.
+  // The launcher applies its own mask; enlarge the foreground beyond the safe zone
+  // so the artwork is not rendered as a tiny centered square.
+  const drawableDir = path.join(resDir, 'drawable-nodpi');
+  const anydpiDir = path.join(resDir, 'mipmap-anydpi-v26');
+  fs.mkdirSync(drawableDir, { recursive: true });
+  fs.mkdirSync(anydpiDir, { recursive: true });
+
+  const foreground = path.join(drawableDir, 'argentas_foreground.png');
+  execFileSync(magick, [
+    croppedIcon, '-resize', '150%x150%!', '-gravity', 'center',
+    '-crop', '1024x1024+0+0', '+repage', foreground
+  ], { stdio: 'inherit' });
+
+  fs.writeFileSync(
+    path.join(anydpiDir, 'ic_launcher.xml'),
+    '<?xml version="1.0" encoding="utf-8"?>\n' +
+    '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n' +
+    '    <background android:drawable="@color/argentas_icon_background" />\n' +
+    '    <foreground android:drawable="@drawable/argentas_foreground" />\n' +
+    '</adaptive-icon>\n'
+  );
+  fs.writeFileSync(
+    path.join(anydpiDir, 'ic_launcher_round.xml'),
+    '<?xml version="1.0" encoding="utf-8"?>\n' +
+    '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n' +
+    '    <background android:drawable="@color/argentas_icon_background" />\n' +
+    '    <foreground android:drawable="@drawable/argentas_foreground" />\n' +
+    '</adaptive-icon>\n'
+  );
+
+  const valuesDir = path.join(resDir, 'values');
+  fs.mkdirSync(valuesDir, { recursive: true });
+  const colorsFile = path.join(valuesDir, 'argentas_icon_colors.xml');
+  fs.writeFileSync(colorsFile,
+    '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n' +
+    '    <color name="argentas_icon_background">#000000</color>\n' +
+    '</resources>\n'
+  );
+
   fs.unlinkSync(croppedIcon);
 } else {
   throw new Error('No se encontró el icono de Argentas en ' + iconSource);
@@ -63,13 +99,9 @@ const appGradleForSdk = path.join(android, 'app', 'build.gradle');
 if (fs.existsSync(appGradleForSdk)) {
   let gSdk = fs.readFileSync(appGradleForSdk, 'utf8');
   const minSdkLine = /minSdkVersion[^\n]*/g;
-  if (minSdkLine.test(gSdk)) {
-    gSdk = gSdk.replace(minSdkLine, 'minSdkVersion 24');
-  } else if (gSdk.includes('defaultConfig {')) {
-    gSdk = gSdk.replace('defaultConfig {', 'defaultConfig {\n        minSdkVersion 24');
-  } else {
-    throw new Error('No se encontró defaultConfig en app/build.gradle');
-  }
+  if (minSdkLine.test(gSdk)) gSdk = gSdk.replace(minSdkLine, 'minSdkVersion 24');
+  else if (gSdk.includes('defaultConfig {')) gSdk = gSdk.replace('defaultConfig {', 'defaultConfig {\n        minSdkVersion 24');
+  else throw new Error('No se encontró defaultConfig en app/build.gradle');
   fs.writeFileSync(appGradleForSdk, gSdk);
 }
 
@@ -105,10 +137,7 @@ if (fs.existsSync(manifest)) {
     s = s.replace(applicationTag, '\n    ' + missing.join('\n    ') + '\n\n    <application');
   }
   s = s.replace(/android:icon="[^"]*"/, 'android:icon="@mipmap/ic_launcher"');
-  if (s.includes('android:roundIcon=')) {
-    s = s.replace(/android:roundIcon="[^"]*"/, 'android:roundIcon="@mipmap/ic_launcher_round"');
-  } else {
-    s = s.replace(/(<application\b[^>]*)(>)/, '$1 android:roundIcon="@mipmap/ic_launcher_round"$2');
-  }
+  if (s.includes('android:roundIcon=')) s = s.replace(/android:roundIcon="[^"]*"/, 'android:roundIcon="@mipmap/ic_launcher_round"');
+  else s = s.replace(/(<application\b[^>]*)(>)/, '$1 android:roundIcon="@mipmap/ic_launcher_round"$2');
   fs.writeFileSync(manifest, s);
 }
