@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const root = process.cwd();
 const android = path.join(root, 'android');
@@ -11,8 +12,6 @@ fs.mkdirSync(targetDir, { recursive: true });
 fs.copyFileSync(native, path.join(targetDir, 'ArgentasSyncPlugin.java'));
 
 // Nearby Connections 19.5.0 requires Android API 24+ at runtime/build time.
-// Capacitor 7 generates minSdk 23 by default, so raise the generated project
-// to 24 on every CI build rather than using tools:overrideLibrary.
 const variablesGradle = path.join(android, 'variables.gradle');
 if (fs.existsSync(variablesGradle)) {
   let v = fs.readFileSync(variablesGradle, 'utf8');
@@ -28,10 +27,12 @@ if (fs.existsSync(iconSource)) {
   }
 
   // Crop the outer 10% on each side so the Argentas artwork fills the launcher icon.
-  // This changes only the launcher image; the app functionality is untouched.
   const croppedIcon = path.join(root, '.argentas_launcher_icon.png');
   const magick = fs.existsSync('/usr/bin/magick') ? '/usr/bin/magick' : 'convert';
-  execFileSync(magick, [iconSource, '-gravity', 'center', '-crop', '80%x80%+0+0', '+repage', '-resize', '1024x1024!', croppedIcon], { stdio: 'inherit' });
+  execFileSync(magick, [
+    iconSource, '-gravity', 'center', '-crop', '80%x80%+0+0', '+repage',
+    '-resize', '1024x1024!', croppedIcon
+  ], { stdio: 'inherit' });
 
   for (const density of ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi']) {
     const iconDir = path.join(resDir, 'mipmap-' + density);
@@ -47,6 +48,7 @@ if (fs.existsSync(iconSource)) {
 } else {
   throw new Error('No se encontró el icono de Argentas en ' + iconSource);
 }
+
 const mainActivity = path.join(targetDir, 'MainActivity.java');
 if (fs.existsSync(mainActivity)) {
   let s = fs.readFileSync(mainActivity, 'utf8');
@@ -57,7 +59,6 @@ if (fs.existsSync(mainActivity)) {
   }
 }
 
-// Ensure the generated app explicitly targets API 24+, as Nearby Connections 19.5.0 requires it.
 const appGradleForSdk = path.join(android, 'app', 'build.gradle');
 if (fs.existsSync(appGradleForSdk)) {
   let gSdk = fs.readFileSync(appGradleForSdk, 'utf8');
@@ -72,8 +73,6 @@ if (fs.existsSync(appGradleForSdk)) {
   fs.writeFileSync(appGradleForSdk, gSdk);
 }
 
-// Nearby Connections is a Google Play services Android dependency.
-// Keep it here because the Android project is generated fresh on every CI build.
 const appGradle = path.join(android, 'app', 'build.gradle');
 if (fs.existsSync(appGradle)) {
   let g = fs.readFileSync(appGradle, 'utf8');
