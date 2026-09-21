@@ -50,9 +50,9 @@ const appGradle = path.join(android, 'app', 'build.gradle');
 if (fs.existsSync(appGradle)) {
   let g = fs.readFileSync(appGradle, 'utf8');
   if (!g.includes('play-services-nearby')) {
-    const deps = /dependencies\\s*\\{/;
+    const deps = /dependencies\s*\{/;
     if (!deps.test(g)) throw new Error('No se encontró dependencies en app/build.gradle');
-    g = g.replace(deps, 'dependencies {\\n    implementation \'com.google.android.gms:play-services-nearby:19.5.0\'');
+    g = g.replace(deps, 'dependencies {\n    implementation \'com.google.android.gms:play-services-nearby:19.5.0\'');
     fs.writeFileSync(appGradle, g);
   }
 }
