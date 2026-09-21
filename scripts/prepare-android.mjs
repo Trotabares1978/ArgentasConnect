@@ -10,10 +10,15 @@ const targetDir = path.join(android, 'app', 'src', 'main', 'java', 'com', 'argen
 fs.mkdirSync(targetDir, { recursive: true });
 fs.copyFileSync(native, path.join(targetDir, 'ArgentasSyncPlugin.java'));
 
-
 const iconDir = path.join(android, 'app', 'src', 'main', 'res', 'mipmap-xxxhdpi');
 fs.mkdirSync(iconDir, { recursive: true });
 if (fs.existsSync(iconSource)) {
+  // Capacitor already creates PNG launcher resources. Remove them first so
+  // the JPG replacement does not collide with the same Android resource name.
+  for (const file of ['ic_launcher.png', 'ic_launcher_round.png']) {
+    const p = path.join(iconDir, file);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  }
   fs.copyFileSync(iconSource, path.join(iconDir, 'ic_launcher.jpg'));
   fs.copyFileSync(iconSource, path.join(iconDir, 'ic_launcher_round.jpg'));
 } else {
@@ -45,7 +50,6 @@ if (fs.existsSync(manifest)) {
     if (!applicationTag.test(s)) throw new Error('No se encontró la etiqueta <application> en AndroidManifest.xml');
     s = s.replace(applicationTag, '\n    ' + missing.join('\n    ') + '\n\n    <application');
   }
-  // Fuerza el icono de la app tanto para el instalador como para el launcher.
   s = s.replace(/android:icon="[^"]*"/, 'android:icon="@mipmap/ic_launcher"');
   if (s.includes('android:roundIcon=')) {
     s = s.replace(/android:roundIcon="[^"]*"/, 'android:roundIcon="@mipmap/ic_launcher_round"');
