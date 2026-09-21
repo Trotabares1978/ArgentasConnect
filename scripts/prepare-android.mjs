@@ -54,6 +54,18 @@ if (fs.existsSync(mainActivity)) {
   }
 }
 
+// Ensure the generated app explicitly targets API 24+, as Nearby Connections 19.5.0 requires it.
+const appGradleForSdk = path.join(android, 'app', 'build.gradle');
+if (fs.existsSync(appGradleForSdk)) {
+  let gSdk = fs.readFileSync(appGradleForSdk, 'utf8');
+  if (/minSdkVersion\\s+\\d+/.test(gSdk)) {
+    gSdk = gSdk.replace(/minSdkVersion\\s+\\d+/g, 'minSdkVersion 24');
+  } else if (gSdk.includes('defaultConfig {')) {
+    gSdk = gSdk.replace(/defaultConfig\\s*\\{/, 'defaultConfig {\\n        minSdkVersion 24');
+  }
+  fs.writeFileSync(appGradleForSdk, gSdk);
+}
+
 // Nearby Connections is a Google Play services Android dependency.
 // Keep it here because the Android project is generated fresh on every CI build.
 const appGradle = path.join(android, 'app', 'build.gradle');
