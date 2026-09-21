@@ -10,17 +10,26 @@ const targetDir = path.join(android, 'app', 'src', 'main', 'java', 'com', 'argen
 fs.mkdirSync(targetDir, { recursive: true });
 fs.copyFileSync(native, path.join(targetDir, 'ArgentasSyncPlugin.java'));
 
-const iconDir = path.join(android, 'app', 'src', 'main', 'res', 'mipmap-xxxhdpi');
-fs.mkdirSync(iconDir, { recursive: true });
+const resDir = path.join(android, 'app', 'src', 'main', 'res');
 if (fs.existsSync(iconSource)) {
-  // Capacitor already creates PNG launcher resources. Remove them first so
-  // the JPG replacement does not collide with the same Android resource name.
-  for (const file of ['ic_launcher.png', 'ic_launcher_round.png']) {
-    const p = path.join(iconDir, file);
+  // Replace Capacitor's generated launcher resources in every density bucket.
+  // Also remove adaptive-icon XMLs: otherwise Android 8+ prefers those XMLs
+  // over the bitmap and the custom Argentas icon is never shown.
+  for (const file of ['ic_launcher.xml', 'ic_launcher_round.xml']) {
+    const p = path.join(resDir, 'mipmap-anydpi-v26', file);
     if (fs.existsSync(p)) fs.unlinkSync(p);
   }
-  fs.copyFileSync(iconSource, path.join(iconDir, 'ic_launcher.jpg'));
-  fs.copyFileSync(iconSource, path.join(iconDir, 'ic_launcher_round.jpg'));
+
+  for (const density of ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi']) {
+    const iconDir = path.join(resDir, 'mipmap-' + density);
+    fs.mkdirSync(iconDir, { recursive: true });
+    for (const file of ['ic_launcher.png', 'ic_launcher.jpg', 'ic_launcher_round.png', 'ic_launcher_round.jpg']) {
+      const p = path.join(iconDir, file);
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+    }
+    fs.copyFileSync(iconSource, path.join(iconDir, 'ic_launcher.jpg'));
+    fs.copyFileSync(iconSource, path.join(iconDir, 'ic_launcher_round.jpg'));
+  }
 } else {
   throw new Error('No se encontró el icono de Argentas en ' + iconSource);
 }
