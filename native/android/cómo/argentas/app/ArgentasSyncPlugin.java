@@ -11,6 +11,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import androidx.core.content.ContextCompat;
 import com.google.android.gms.common.api.Status;
 import com.google.android.gms.nearby.Nearby;
 import com.google.android.gms.nearby.connection.AdvertisingOptions;
@@ -301,19 +302,19 @@ public class ArgentasSyncPlugin extends Plugin {
 
     private boolean hasRequiredPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN)
+            if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.BLUETOOTH_SCAN)
                     != PackageManager.PERMISSION_GRANTED) return false;
-            if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+            if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.BLUETOOTH_CONNECT)
                     != PackageManager.PERMISSION_GRANTED) return false;
-            if (checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
+            if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.BLUETOOTH_ADVERTISE)
                     != PackageManager.PERMISSION_GRANTED) return false;
         } else {
-            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+            if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_FINE_LOCATION)
                     != PackageManager.PERMISSION_GRANTED) return false;
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES)
+            if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.NEARBY_WIFI_DEVICES)
                     != PackageManager.PERMISSION_GRANTED) return false;
         }
 
