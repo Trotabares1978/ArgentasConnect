@@ -1,22 +1,22 @@
 package com.argentas.app;
 
 import android.Manifest;
-import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.os.Build;
-
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
+import com.google.android.gms.common.api.Status;
 import com.google.android.gms.nearby.Nearby;
 import com.google.android.gms.nearby.connection.AdvertisingOptions;
 import com.google.android.gms.nearby.connection.ConnectionInfo;
 import com.google.android.gms.nearby.connection.ConnectionLifecycleCallback;
+import com.google.android.gms.nearby.connection.ConnectionResolution;
 import com.google.android.gms.nearby.connection.ConnectionsClient;
 import com.google.android.gms.nearby.connection.ConnectionsStatusCodes;
 import com.google.android.gms.nearby.connection.DiscoveredEndpointInfo;
@@ -31,18 +31,30 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@CapacitorPlugin(name = "ArgentasSync")
+@CapacitorPlugin(
+    name = "ArgentasSync",
+    permissions = {
+        @Permission(
+            alias = "nearby",
+            strings = {
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_ADVERTISE,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.NEARBY_WIFI_DEVICES
+            }
+        )
+    }
+)
 public class ArgentasSyncPlugin extends Plugin {
     private static final String SERVICE_ID = "com.argentas.app";
     private static final Strategy STRATEGY = Strategy.P2P_POINT_TO_POINT;
-    private static final int PERMISSION_REQUEST_CODE = 38742;
 
     private ConnectionsClient connections;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final Set<String> discovered = new HashSet<>();
     private volatile String connectedEndpoint;
     private volatile String connectedEndpointName;
-    private volatile boolean waitingForPermissions = false;
 
     private final PayloadCallback payloadCallback = new PayloadCallback() {
         @Override
@@ -58,34 +70,49 @@ public class ArgentasSyncPlugin extends Plugin {
         }
 
         @Override
-        public void onPayloadTransferUpdate(String endpointId, com.google.android.gms.nearby.connection.PayloadTransferUpdate update) {
-            // Sales snapshots are small byte payloads; no progress UI is needed.
+        public void onPayloadTransferUpdate(
+                String endpointId,
+                com.google.android.gms.nearby.connection.PayloadTransferUpdate update
+        ) {
+            // Sales data are small byte payloads; no progress UI is needed.
         }
     };
 
     private final ConnectionLifecycleCallback connectionLifecycleCallback =
             new ConnectionLifecycleCallback() {
                 @Override
-                public void onConnectionInitiated(String endpointId, ConnectionInfo connectionInfo) {
-                    // Argentas is designed for two phones owned by the same operator.
-                    // We accept automatically so there are no pairing codes or buttons.
+                public void onConnectionInitiated(
+                        String endpointId,
+                        ConnectionInfo connectionInfo
+                ) {
+                    // No pairing code or manual button: both Argentas phones
+                    // automatically accept the peer connection.
                     connections.acceptConnection(endpointId, payloadCallback);
                 }
 
                 @Override
-                public void onConnectionResult(String endpointId, com.google.android.gms.common.api.Status status) {
-                    if (status.getStatusCode() == ConnectionsStatusCodes.STATUS_OK) {
+                public void onConnectionResult(
+                        String endpointId,
+                        ConnectionResolution result
+                ) {
+                    if (result.getStatus().getStatusCode()
+                            == ConnectionsStatusCodes.STATUS_OK) {
+
                         connectedEndpoint = endpointId;
                         connectedEndpointName = null;
                         emitStatus("Conectado");
-                        connections.stopDiscovery();
+
+                        // Once the two phones are connected, stop active discovery
+                        // to reduce radio traffic. Advertising remains available.
+                        try {
+                            connections.stopDiscovery();
+                        } catch (Exception ignored) { }
+
                     } else {
-                        if (endpointId.equals(connectedEndpoint)) {
-                            connectedEndpoint = null;
-                            connectedEndpointName = null;
-                        }
+                        connectedEndpoint = null;
+                        connectedEndpointName = null;
                         emitStatus("Buscando");
-                        restartDiscoverySoon();
+                        restartTransport();
                     }
                 }
 
@@ -95,7 +122,7 @@ public class ArgentasSyncPlugin extends Plugin {
                         connectedEndpoint = null;
                         connectedEndpointName = null;
                         emitStatus("Buscando");
-                        startAdvertisingAndDiscovery();
+                        restartTransport();
                     }
                 }
             };
@@ -103,14 +130,18 @@ public class ArgentasSyncPlugin extends Plugin {
     private final EndpointDiscoveryCallback endpointDiscoveryCallback =
             new EndpointDiscoveryCallback() {
                 @Override
-                public void onEndpointFound(String endpointId, DiscoveredEndpointInfo info) {
+                public void onEndpointFound(
+                        String endpointId,
+                        DiscoveredEndpointInfo info
+                ) {
                     if (!running.get() || connectedEndpoint != null) return;
 
                     String peerName = info.getEndpointName();
                     if (peerName == null) peerName = "";
 
-                    // Only one side requests the connection. Both sides still
-                    // advertise and discover, so either phone can be A or B.
+                    // Both phones advertise and discover, but only the one with
+                    // the smaller stable name initiates. This prevents duplicate
+                    // simultaneous connection attempts.
                     String localName = getLocalEndpointName();
                     if (localName.compareTo(peerName) > 0) return;
 
@@ -147,40 +178,29 @@ public class ArgentasSyncPlugin extends Plugin {
     @PluginMethod
     public void start(PluginCall call) {
         if (!hasRequiredPermissions()) {
-            waitingForPermissions = true;
-            Activity activity = getActivity();
-            if (activity != null) {
-                ActivityCompat.requestPermissions(
-                        activity,
-                        getRequiredPermissions(),
-                        PERMISSION_REQUEST_CODE
-                );
-                emitStatus("Buscando");
-            } else {
-                emitStatus("Desconectado");
-            }
-            call.resolve();
+            requestPermissionForAlias("nearby", call, "nearbyPermissionsCallback");
             return;
         }
 
-        startAdvertisingAndDiscovery();
+        startTransport();
         call.resolve();
     }
 
-    public void onNearbyPermissionsResult(int requestCode) {
-        if (requestCode != PERMISSION_REQUEST_CODE) return;
-
-        waitingForPermissions = false;
+    @PermissionCallback
+    private void nearbyPermissionsCallback(PluginCall call) {
         if (hasRequiredPermissions()) {
-            startAdvertisingAndDiscovery();
+            startTransport();
+            call.resolve();
         } else {
             emitStatus("Desconectado");
+            call.reject("Se requieren permisos de dispositivos cercanos para sincronizar Argentas.");
         }
     }
 
     @PluginMethod
     public void send(PluginCall call) {
         String data = call.getString("data", "");
+
         if (data != null && !data.isEmpty() && connectedEndpoint != null) {
             try {
                 connections.sendPayload(
@@ -189,16 +209,17 @@ public class ArgentasSyncPlugin extends Plugin {
                 );
             } catch (Exception ignored) { }
         }
+
         call.resolve();
     }
 
     @PluginMethod
     public void stop(PluginCall call) {
-        stopAll();
+        stopTransport();
         call.resolve();
     }
 
-    private synchronized void startAdvertisingAndDiscovery() {
+    private synchronized void startTransport() {
         if (running.get() || !hasRequiredPermissions()) return;
 
         running.set(true);
@@ -223,59 +244,37 @@ public class ArgentasSyncPlugin extends Plugin {
                 SERVICE_ID,
                 connectionLifecycleCallback,
                 advertisingOptions
-        ).addOnFailureListener(e -> emitStatus("Desconectado"));
+        ).addOnFailureListener(e -> {
+            running.set(false);
+            emitStatus("Desconectado");
+        });
 
         connections.startDiscovery(
                 SERVICE_ID,
                 endpointDiscoveryCallback,
                 discoveryOptions
-        ).addOnFailureListener(e -> emitStatus("Desconectado"));
-    }
-
-    private void restartDiscoverySoon() {
-        getActivity().runOnUiThread(() -> {
-            if (!running.get() || connectedEndpoint != null) return;
-            startAdvertisingAndDiscovery();
+        ).addOnFailureListener(e -> {
+            running.set(false);
+            emitStatus("Desconectado");
         });
     }
 
-    private String getLocalEndpointName() {
-        String id = android.provider.Settings.Secure.getString(
-                getContext().getContentResolver(),
-                android.provider.Settings.Secure.ANDROID_ID
-        );
-        return "Argentas-" + (id == null ? "device" : id);
-    }
+    private synchronized void restartTransport() {
+        if (!hasRequiredPermissions()) return;
 
-    private boolean hasRequiredPermissions() {
-        for (String permission : getRequiredPermissions()) {
-            if (ContextCompat.checkSelfPermission(getContext(), permission)
-                    != PackageManager.PERMISSION_GRANTED) {
-                return false;
-            }
-        }
-        return true;
-    }
+        running.set(false);
 
-    private String[] getRequiredPermissions() {
-        java.util.ArrayList<String> permissions = new java.util.ArrayList<>();
+        try { connections.stopDiscovery(); } catch (Exception ignored) { }
+        try { connections.stopAdvertising(); } catch (Exception ignored) { }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            permissions.add(Manifest.permission.BLUETOOTH_SCAN);
-            permissions.add(Manifest.permission.BLUETOOTH_CONNECT);
-            permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE);
-        } else {
-            permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        synchronized (discovered) {
+            discovered.clear();
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES);
-        }
-
-        return permissions.toArray(new String[0]);
+        startTransport();
     }
 
-    private synchronized void stopAll() {
+    private synchronized void stopTransport() {
         running.set(false);
         connectedEndpoint = null;
         connectedEndpointName = null;
@@ -291,6 +290,36 @@ public class ArgentasSyncPlugin extends Plugin {
         emitStatus("Desconectado");
     }
 
+    private String getLocalEndpointName() {
+        String id = android.provider.Settings.Secure.getString(
+                getContext().getContentResolver(),
+                android.provider.Settings.Secure.ANDROID_ID
+        );
+
+        return "Argentas-" + (id == null ? "device" : id);
+    }
+
+    private boolean hasRequiredPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN)
+                    != PackageManager.PERMISSION_GRANTED) return false;
+            if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                    != PackageManager.PERMISSION_GRANTED) return false;
+            if (checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
+                    != PackageManager.PERMISSION_GRANTED) return false;
+        } else {
+            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED) return false;
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES)
+                    != PackageManager.PERMISSION_GRANTED) return false;
+        }
+
+        return true;
+    }
+
     private void emitStatus(String status) {
         JSObject ret = new JSObject();
         ret.put("status", status);
@@ -299,7 +328,7 @@ public class ArgentasSyncPlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
-        stopAll();
+        stopTransport();
         super.handleOnDestroy();
     }
 }
