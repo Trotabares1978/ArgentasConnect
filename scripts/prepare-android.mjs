@@ -10,6 +10,16 @@ const targetDir = path.join(android, 'app', 'src', 'main', 'java', 'com', 'argen
 fs.mkdirSync(targetDir, { recursive: true });
 fs.copyFileSync(native, path.join(targetDir, 'ArgentasSyncPlugin.java'));
 
+// Nearby Connections 19.5.0 requires Android API 24+ at runtime/build time.
+// Capacitor 7 generates minSdk 23 by default, so raise the generated project
+// to 24 on every CI build rather than using tools:overrideLibrary.
+const variablesGradle = path.join(android, 'variables.gradle');
+if (fs.existsSync(variablesGradle)) {
+  let v = fs.readFileSync(variablesGradle, 'utf8');
+  v = v.replace(/minSdkVersion\\s*=\\s*23/g, 'minSdkVersion = 24');
+  fs.writeFileSync(variablesGradle, v);
+}
+
 const resDir = path.join(android, 'app', 'src', 'main', 'res');
 if (fs.existsSync(iconSource)) {
   // Replace Capacitor's generated launcher resources in every density bucket.
