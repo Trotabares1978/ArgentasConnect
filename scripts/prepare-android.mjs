@@ -16,7 +16,7 @@ fs.copyFileSync(native, path.join(targetDir, 'ArgentasSyncPlugin.java'));
 const variablesGradle = path.join(android, 'variables.gradle');
 if (fs.existsSync(variablesGradle)) {
   let v = fs.readFileSync(variablesGradle, 'utf8');
-  v = v.replace(/minSdkVersion\\s*=\\s*23/g, 'minSdkVersion = 24');
+  v = v.replace(/minSdkVersion\s*=\s*23/g, 'minSdkVersion = 24');
   fs.writeFileSync(variablesGradle, v);
 }
 
@@ -59,9 +59,9 @@ const appGradleForSdk = path.join(android, 'app', 'build.gradle');
 if (fs.existsSync(appGradleForSdk)) {
   let gSdk = fs.readFileSync(appGradleForSdk, 'utf8');
   if (/minSdkVersion\\s+\\d+/.test(gSdk)) {
-    gSdk = gSdk.replace(/minSdkVersion\\s+\\d+/g, 'minSdkVersion 24');
+    gSdk = gSdk.replace(/minSdkVersion\s+\d+/g, 'minSdkVersion 24');
   } else if (gSdk.includes('defaultConfig {')) {
-    gSdk = gSdk.replace(/defaultConfig\\s*\\{/, 'defaultConfig {\\n        minSdkVersion 24');
+    gSdk = gSdk.replace(/defaultConfig\s*\{/, 'defaultConfig {\\n        minSdkVersion 24');
   }
   fs.writeFileSync(appGradleForSdk, gSdk);
 }
