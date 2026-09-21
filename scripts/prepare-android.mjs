@@ -58,10 +58,13 @@ if (fs.existsSync(mainActivity)) {
 const appGradleForSdk = path.join(android, 'app', 'build.gradle');
 if (fs.existsSync(appGradleForSdk)) {
   let gSdk = fs.readFileSync(appGradleForSdk, 'utf8');
-  if (/minSdkVersion\\s+\\d+/.test(gSdk)) {
-    gSdk = gSdk.replace(/minSdkVersion\s+\d+/g, 'minSdkVersion 24');
+  const minSdkLine = /minSdkVersion[^\n]*/g;
+  if (minSdkLine.test(gSdk)) {
+    gSdk = gSdk.replace(minSdkLine, 'minSdkVersion 24');
   } else if (gSdk.includes('defaultConfig {')) {
-    gSdk = gSdk.replace(/defaultConfig\s*\{/, 'defaultConfig {\\n        minSdkVersion 24');
+    gSdk = gSdk.replace('defaultConfig {', 'defaultConfig {\n        minSdkVersion 24');
+  } else {
+    throw new Error('No se encontró defaultConfig en app/build.gradle');
   }
   fs.writeFileSync(appGradleForSdk, gSdk);
 }
