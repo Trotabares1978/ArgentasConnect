@@ -44,6 +44,19 @@ if (fs.existsSync(mainActivity)) {
   }
 }
 
+// Nearby Connections is a Google Play services Android dependency.
+// Keep it here because the Android project is generated fresh on every CI build.
+const appGradle = path.join(android, 'app', 'build.gradle');
+if (fs.existsSync(appGradle)) {
+  let g = fs.readFileSync(appGradle, 'utf8');
+  if (!g.includes('play-services-nearby')) {
+    const deps = /dependencies\\s*\\{/;
+    if (!deps.test(g)) throw new Error('No se encontró dependencies en app/build.gradle');
+    g = g.replace(deps, 'dependencies {\\n    implementation \'com.google.android.gms:play-services-nearby:19.5.0\'');
+    fs.writeFileSync(appGradle, g);
+  }
+}
+
 const manifest = path.join(android, 'app', 'src', 'main', 'AndroidManifest.xml');
 if (fs.existsSync(manifest)) {
   let s = fs.readFileSync(manifest, 'utf8');
@@ -51,7 +64,12 @@ if (fs.existsSync(manifest)) {
     '<uses-permission android:name="android.permission.INTERNET" />',
     '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
     '<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />',
-    '<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />'
+    '<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />',
+    '<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />',
+    '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />',
+    '<uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />',
+    '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />',
+    '<uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />'
   ];
   const missing = perms.filter((p) => !s.includes(p));
   if (missing.length) {
