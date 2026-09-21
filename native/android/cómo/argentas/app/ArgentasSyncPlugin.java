@@ -300,7 +300,7 @@ public class ArgentasSyncPlugin extends Plugin {
         return "Argentas-" + (id == null ? "device" : id);
     }
 
-    private boolean hasRequiredPermissions() {
+    public boolean hasRequiredPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.BLUETOOTH_SCAN)
                     != PackageManager.PERMISSION_GRANTED) return false;
