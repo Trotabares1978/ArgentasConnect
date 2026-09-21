@@ -372,30 +372,12 @@ localStorage.setItem = (
 // asincrónica. Volvemos a comprobar la
 // inserción después de cada render.
 // Los indicadores originales no se modifican.
-let indicatorCheckTimer = null;
-
-const observer =
-  new MutationObserver(() => {
-    if (indicatorCheckTimer !== null) return;
-
-    indicatorCheckTimer = setTimeout(() => {
-      indicatorCheckTimer = null;
-      installIndicator();
-    }, 250);
-  });
-
 function startObservers() {
-  if (!document.documentElement) return;
+  // The indicator is attached directly to <body>, outside the React app root,
+  // so it survives normal React renders without a MutationObserver.
+  if (!document.body) return;
 
-  // Watch only for enough DOM changes to recover the small overlay.
-  // The indicator itself lives directly under <body>, outside the app root.
-  observer.observe(
-    document.documentElement,
-    {
-      childList: true,
-      subtree: true
-    }
-  );
+  installIndicator();
 
   setTimeout(
     boot,
@@ -419,11 +401,6 @@ window.addEventListener(
   'load',
   () => {
     installIndicator();
-
-    setTimeout(
-      boot,
-      350
-    );
   },
   { once: true }
 );
