@@ -187,7 +187,7 @@ public class ArgentasSyncPlugin extends Plugin {
     }
 
     @PermissionCallback
-    private void nearbyPermissionsCallback(PluginCall call) {
+    public void nearbyPermissionsCallback(PluginCall call) {
         if (hasRequiredPermissions()) {
             startTransport();
             call.resolve();
