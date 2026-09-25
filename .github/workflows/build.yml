@@ -54,3 +54,5 @@ jobs:
         with:
           name: Argentas-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      # Trigger de prueba para verificar que el runner público arranca correctamente.
