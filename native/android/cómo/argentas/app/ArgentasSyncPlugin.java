@@ -55,6 +55,8 @@ public class ArgentasSyncPlugin extends Plugin {
     private final Set<String> discovered = new HashSet<>();
     private volatile String connectedEndpoint;
     private volatile String connectedEndpointName;
+    private final AtomicBoolean advertising = new AtomicBoolean(false);
+    private final AtomicBoolean discovering = new AtomicBoolean(false);
 
     private final PayloadCallback payloadCallback = new PayloadCallback() {
         @Override
@@ -102,17 +104,13 @@ public class ArgentasSyncPlugin extends Plugin {
                         connectedEndpointName = null;
                         emitStatus("Conectado");
 
-                        // Once the two phones are connected, stop active discovery
-                        // to reduce radio traffic. Advertising remains available.
-                        try {
-                            connections.stopDiscovery();
-                        } catch (Exception ignored) { }
+                        // Keep advertising and discovery alive for automatic reconnection.
 
                     } else {
                         connectedEndpoint = null;
                         connectedEndpointName = null;
                         emitStatus("Buscando");
-                        restartTransport();
+                        scheduleRestart();
                     }
                 }
 
@@ -202,12 +200,12 @@ public class ArgentasSyncPlugin extends Plugin {
         String data = call.getString("data", "");
 
         if (data != null && !data.isEmpty() && connectedEndpoint != null) {
-            try {
-                connections.sendPayload(
-                        connectedEndpoint,
-                        Payload.fromBytes(data.getBytes(StandardCharsets.UTF_8))
-                );
-            } catch (Exception ignored) { }
+            byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
+            if (bytes.length > 32 * 1024) {
+                call.reject("La sincronización supera el límite de 32 KB de Nearby Connections.");
+                return;
+            }
+            connections.sendPayload(connectedEndpoint, Payload.fromBytes(bytes));
         }
 
         call.resolve();
@@ -244,18 +242,30 @@ public class ArgentasSyncPlugin extends Plugin {
                 SERVICE_ID,
                 connectionLifecycleCallback,
                 advertisingOptions
-        ).addOnFailureListener(e -> {
-            running.set(false);
-            emitStatus("Desconectado");
+        ).addOnSuccessListener(unused -> advertising.set(true))
+         .addOnFailureListener(e -> {
+            advertising.set(false);
+            emitStatus("Buscando");
+            scheduleRestart();
         });
 
         connections.startDiscovery(
                 SERVICE_ID,
                 endpointDiscoveryCallback,
                 discoveryOptions
-        ).addOnFailureListener(e -> {
-            running.set(false);
-            emitStatus("Desconectado");
+        ).addOnSuccessListener(unused -> discovering.set(true))
+         .addOnFailureListener(e -> {
+            discovering.set(false);
+            emitStatus("Buscando");
+            scheduleRestart();
+        });
+    }
+
+    private void scheduleRestart() {
+        if (getActivity() == null) return;
+        getActivity().runOnUiThread(() -> {
+            if (!running.get() || !hasRequiredPermissions()) return;
+            getActivity().getWindow().getDecorView().postDelayed(this::restartTransport, 1200);
         });
     }
 
@@ -266,6 +276,8 @@ public class ArgentasSyncPlugin extends Plugin {
 
         try { connections.stopDiscovery(); } catch (Exception ignored) { }
         try { connections.stopAdvertising(); } catch (Exception ignored) { }
+        advertising.set(false);
+        discovering.set(false);
 
         synchronized (discovered) {
             discovered.clear();
