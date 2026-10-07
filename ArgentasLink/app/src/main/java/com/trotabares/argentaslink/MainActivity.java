@@ -10,7 +10,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.provider.Settings;
 import android.graphics.Color;
 import android.view.Gravity;
 import android.widget.Button;
@@ -23,11 +22,10 @@ import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.util.Enumeration;
-import java.net.NetworkInterface;
 
 public class MainActivity extends Activity {
     private static final int TCP_PORT = 45678;
@@ -37,8 +35,8 @@ public class MainActivity extends Activity {
     private WifiManager wifi;
     private WifiManager.LocalOnlyHotspotReservation hotspotReservation;
     private ServerSocket serverSocket;
-    private Socket socket;
-    private OutputStream out;
+    private volatile Socket socket;
+    private volatile OutputStream out;
     private volatile boolean running = true;
     private volatile boolean serverMode = false;
     private TextView status, role, device, stats, network, log;
@@ -109,7 +107,7 @@ public class MainActivity extends Activity {
 
         Button ping = new Button(this);
         ping.setText("ENVIAR MENSAJE DE PRUEBA");
-        ping.setOnClickListener(v -> send("PING"));
+        ping.setOnClickListener(v -> send("TEST|Hola desde ArgentasLink"));
         root.addView(ping);
 
         TextView events = label("REGISTRO", 15);
@@ -160,6 +158,7 @@ public class MainActivity extends Activity {
         }
 
         closeSocketOnly();
+        closeServerOnly();
         serverMode = true;
         role.setText("MODO SERVIDOR · TABLET");
         setStatus("● CREANDO RED LOCAL", Color.rgb(41,182,246));
@@ -212,6 +211,7 @@ public class MainActivity extends Activity {
             append("Conectá el celular a esta red Wi-Fi.");
         } catch (Exception e) {
             network.setText("Red: ArgentasLink\nConectá el celular a la red local.");
+            append("No pude leer los datos de la red, pero el hotspot sigue activo.");
         }
     }
 
@@ -219,16 +219,23 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             try {
                 serverSocket = new ServerSocket(TCP_PORT);
+                serverSocket.setReuseAddress(true);
                 append("✓ TCP escuchando en puerto " + TCP_PORT);
-                while (running && serverMode) {
-                    Socket s = serverSocket.accept();
-                    if (s != null) {
-                        attach(s);
-                        break;
+                while (running && serverMode && !serverSocket.isClosed()) {
+                    try {
+                        Socket s = serverSocket.accept();
+                        if (s != null) {
+                            configureSocket(s);
+                            attach(s);
+                        }
+                    } catch (Exception e) {
+                        if (running && serverMode && serverSocket != null && !serverSocket.isClosed()) {
+                            append("Aceptación TCP: " + e.getMessage());
+                        }
                     }
                 }
             } catch (Exception e) {
-                if (running) append("Servidor TCP: " + e.getMessage());
+                if (running && serverMode) append("Servidor TCP: " + e.getMessage());
             }
         }, "ArgentasLink-tcp-server").start();
     }
@@ -304,71 +311,129 @@ public class MainActivity extends Activity {
     private void tryConnect(InetAddress host, int port) {
         try {
             append("Conectando por TCP...");
-            Socket s = new Socket(host, port);
+            Socket s = new Socket();
+            configureSocket(s);
+            s.connect(new InetSocketAddress(host, port), 5000);
             attach(s);
         } catch (Exception e) {
             setStatus("● TABLET NO DISPONIBLE", Color.rgb(255,152,0));
-            append("No se pudo abrir TCP.");
+            append("No se pudo abrir TCP: " + e.getClass().getSimpleName());
         }
+    }
+
+    private void configureSocket(Socket s) throws Exception {
+        s.setKeepAlive(true);
+        s.setTcpNoDelay(true);
+        s.setSoTimeout(0);
     }
 
     private synchronized void attach(Socket s) {
         try {
-            if (socket != null && !socket.isClosed()) {
-                s.close();
+            if (!running || !s.isConnected() || s.isClosed()) {
+                try { s.close(); } catch (Exception ignored) {}
                 return;
             }
+
+            Socket old = socket;
+            if (old != null && !old.isClosed()) {
+                try { old.close(); } catch (Exception ignored) {}
+            }
+
             socket = s;
             out = s.getOutputStream();
             setStatus("● CONECTADO", Color.rgb(66,217,107));
             append("✓ CONEXIÓN WI-FI/TCP ESTABLECIDA");
             device.setText("Dispositivo: " + s.getInetAddress().getHostAddress());
             new Thread(() -> readLoop(s), "ArgentasLink-reader").start();
-            send("HELLO|ArgentasLink");
+
+            // El saludo no depende del botón de prueba y se envía sobre el socket recién asociado.
+            sendOnSocket(s, "HELLO|ArgentasLink");
         } catch (Exception e) {
-            closeSocketOnly();
+            append("Error al asociar TCP: " + e.getMessage());
+            closeSocketIfSame(s);
         }
     }
 
     private void readLoop(Socket s) {
         try {
-            BufferedReader r = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+            BufferedReader r = new BufferedReader(
+                    new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
             String line;
-            while (running && (line = r.readLine()) != null) {
+            while (running && !s.isClosed() && (line = r.readLine()) != null) {
                 final String m = line;
                 received++;
                 refreshStats();
                 main.post(() -> append("← " + m));
-                if ("PING".equals(m)) send("PONG");
+                if ("PING".equals(m)) sendOnSocket(s, "PONG");
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            if (running) append("TCP cerrado: " + e.getClass().getSimpleName() +
+                    (e.getMessage() == null ? "" : " · " + e.getMessage()));
         } finally {
-            closeSocketOnly();
-            if (!serverMode && running) main.postDelayed(this::startClientMode, 1500);
+            closeSocketIfSame(s);
+            if (!serverMode && running) {
+                main.postDelayed(() -> {
+                    if (!serverMode && socket == null && running) startClientMode();
+                }, 1500);
+            }
         }
     }
 
-    private synchronized void send(String message) {
+    private void sendOnSocket(Socket s, String message) {
         try {
-            if (out == null || socket == null || socket.isClosed() || !socket.isConnected()) {
-                append("⚠ Sin conexión");
-                return;
+            OutputStream stream;
+            synchronized (this) {
+                if (s == null || s.isClosed() || !s.isConnected() || socket != s || out == null) {
+                    append("⚠ Sin conexión para enviar.");
+                    return;
+                }
+                stream = out;
             }
-            out.write((message + "\n").getBytes(StandardCharsets.UTF_8));
-            out.flush();
+            stream.write((message + "\n").getBytes(StandardCharsets.UTF_8));
+            stream.flush();
             sent++;
             refreshStats();
             append("→ " + message);
         } catch (Exception e) {
-            closeSocketOnly();
+            append("Error enviando '" + message + "': " +
+                    e.getClass().getSimpleName() +
+                    (e.getMessage() == null ? "" : " · " + e.getMessage()));
+            closeSocketIfSame(s);
         }
     }
 
-    private synchronized void closeSocketOnly() {
-        try { if (socket != null) socket.close(); } catch (Exception ignored) {}
+    private void send(String message) {
+        Socket s = socket;
+        if (s == null) {
+            append("⚠ Sin conexión.");
+            return;
+        }
+        sendOnSocket(s, message);
+    }
+
+    private synchronized void closeSocketIfSame(Socket expected) {
+        if (socket != expected) return;
+        try { if (expected != null) expected.close(); } catch (Exception ignored) {}
         socket = null;
         out = null;
         if (status != null && running) setStatus("● DESCONECTADO", Color.rgb(255,82,82));
+    }
+
+    private synchronized void closeSocketOnly() {
+        Socket s = socket;
+        if (s != null) {
+            try { s.close(); } catch (Exception ignored) {}
+        }
+        socket = null;
+        out = null;
+        if (status != null && running) setStatus("● DESCONECTADO", Color.rgb(255,82,82));
+    }
+
+    private synchronized void closeServerOnly() {
+        if (serverSocket != null) {
+            try { serverSocket.close(); } catch (Exception ignored) {}
+        }
+        serverSocket = null;
     }
 
     private void setStatus(String s, int color) {
@@ -392,7 +457,7 @@ public class MainActivity extends Activity {
         running = false;
         serverMode = false;
         closeSocketOnly();
-        try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
+        closeServerOnly();
         try { if (hotspotReservation != null) hotspotReservation.close(); } catch (Exception ignored) {}
         hotspotReservation = null;
         super.onDestroy();
