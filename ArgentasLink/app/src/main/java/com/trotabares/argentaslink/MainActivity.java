@@ -13,6 +13,7 @@ import android.os.Looper;
 import android.graphics.Color;
 import android.view.Gravity;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -76,10 +77,20 @@ public class MainActivity extends Activity {
         root.setPadding(20, 18, 20, 12);
         root.setBackgroundColor(Color.rgb(12,15,18));
 
-        TextView title = label("🍔  ArgentasLink", 28);
-        title.setGravity(Gravity.CENTER);
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER);
+        ImageView appIcon = new ImageView(this);
+        appIcon.setImageResource(R.drawable.ic_argentas_link);
+        appIcon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        header.addView(appIcon, new LinearLayout.LayoutParams(58,58));
+        TextView title = label("ArgentasLink", 28);
+        title.setGravity(Gravity.CENTER_VERTICAL);
         title.setTextColor(Color.rgb(255,193,7));
-        root.addView(title, new LinearLayout.LayoutParams(-1,70));
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(-2,58);
+        titleLp.leftMargin = 10;
+        header.addView(title, titleLp);
+        root.addView(header, new LinearLayout.LayoutParams(-1,72));
 
         status = label("● LISTO", 21);
         status.setGravity(Gravity.CENTER);
