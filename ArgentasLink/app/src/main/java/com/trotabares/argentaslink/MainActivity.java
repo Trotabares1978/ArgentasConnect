@@ -34,6 +34,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int TCP_PORT = 45678;
     private static final int DISCOVERY_PORT = 45679;
+    private static final int LOCAL_BRIDGE_PORT = 45680;
     private static final int REQ_WIFI = 51;
 
     private WifiManager wifi;
@@ -43,6 +44,10 @@ public class MainActivity extends Activity {
     private volatile OutputStream out;
     private volatile boolean running = true;
     private volatile boolean serverMode = false;
+    private ServerSocket localBridgeServer;
+    private volatile Socket localBridgeSocket;
+    private volatile OutputStream localBridgeOut;
+    private final ExecutorService bridgeExecutor = Executors.newCachedThreadPool();
     private TextView status, role, device, stats, network, log;
     private final Handler main = new Handler(Looper.getMainLooper());
     private int sent = 0, received = 0;
@@ -52,6 +57,7 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         buildUi();
+        startLocalBridge();
         wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
         requestWifiPermissionIfNeeded();
         main.postDelayed(heartbeat,4000);
@@ -368,6 +374,7 @@ public class MainActivity extends Activity {
 
             socket = s;
             out = s.getOutputStream();
+            sendLocalBridgeState(true);
             setStatus("● CONECTADO", Color.rgb(66,217,107));
             append("✓ CONEXIÓN WI-FI/TCP ESTABLECIDA");
             device.setText("Dispositivo: " + s.getInetAddress().getHostAddress());
@@ -378,6 +385,88 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             append("Error al asociar TCP: " + e.getMessage());
             closeSocketIfSame(s);
+        }
+    }
+
+    private void startLocalBridge() {
+        bridgeExecutor.execute(() -> {
+            try {
+                ServerSocket ss = new ServerSocket();
+                ss.setReuseAddress(true);
+                ss.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), LOCAL_BRIDGE_PORT));
+                localBridgeServer = ss;
+                append("✓ Puente local ArgentasComandas en 127.0.0.1:" + LOCAL_BRIDGE_PORT);
+                while (running && !ss.isClosed()) {
+                    Socket c = ss.accept();
+                    configureSocket(c);
+                    synchronized (this) {
+                        if (localBridgeSocket != null) {
+                            try { localBridgeSocket.close(); } catch (Exception ignored) {}
+                        }
+                        localBridgeSocket = c;
+                        localBridgeOut = c.getOutputStream();
+                    }
+                    sendLocalBridgeState(socket != null && !socket.isClosed());
+                    bridgeExecutor.execute(() -> readLocalBridge(c));
+                }
+            } catch (Exception e) {
+                if (running) append("Puente local: " + e.getClass().getSimpleName() +
+                        (e.getMessage() == null ? "" : " · " + e.getMessage()));
+            }
+        });
+    }
+
+    private void readLocalBridge(Socket c) {
+        try {
+            BufferedReader r = new BufferedReader(
+                    new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8));
+            String line;
+            while (running && !c.isClosed() && (line = r.readLine()) != null) {
+                if (line.startsWith("APP|")) {
+                    String message = line.substring(4);
+                    Socket remote = socket;
+                    if (remote != null) {
+                        sendExecutor.execute(() -> sendOnSocket(remote, message));
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        } finally {
+            synchronized (this) {
+                if (localBridgeSocket == c) {
+                    localBridgeSocket = null;
+                    localBridgeOut = null;
+                }
+            }
+            try { c.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private synchronized void sendLocalBridgeState(boolean remoteConnected) {
+        OutputStream stream = localBridgeOut;
+        if (stream == null) return;
+        try {
+            stream.write(("LINK_STATE|" + (remoteConnected ? "CONECTADO" : "DESCONECTADO") + "\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            stream.flush();
+        } catch (Exception e) {
+            try { if (localBridgeSocket != null) localBridgeSocket.close(); } catch (Exception ignored) {}
+            localBridgeSocket = null;
+            localBridgeOut = null;
+        }
+    }
+
+    private synchronized void sendLocalBridgeMessage(String message) {
+        OutputStream stream = localBridgeOut;
+        if (stream == null) return;
+        try {
+            String clean = message.replace("\r", "").replace("\n", "");
+            stream.write(("APP|" + clean + "\n").getBytes(StandardCharsets.UTF_8));
+            stream.flush();
+        } catch (Exception e) {
+            try { if (localBridgeSocket != null) localBridgeSocket.close(); } catch (Exception ignored) {}
+            localBridgeSocket = null;
+            localBridgeOut = null;
         }
     }
 
@@ -392,6 +481,7 @@ public class MainActivity extends Activity {
                 refreshStats();
                 main.post(() -> append("← " + m));
                 if ("PING".equals(m)) sendExecutor.execute(() -> sendOnSocket(s, "PONG", false));
+                else if (!m.equals("HELLO|ArgentasLink") && !m.equals("PONG") && !m.equals("PING")) sendLocalBridgeMessage(m);
             }
         } catch (Exception e) {
             if (running) append("TCP cerrado: " + e.getClass().getSimpleName() +
@@ -445,6 +535,7 @@ public class MainActivity extends Activity {
     private synchronized void closeSocketIfSame(Socket expected) {
         if (socket != expected) return;
         try { if (expected != null) expected.close(); } catch (Exception ignored) {}
+        sendLocalBridgeState(false);
         socket = null;
         out = null;
         if (status != null && running) setStatus("● DESCONECTADO", Color.rgb(255,82,82));
@@ -493,6 +584,12 @@ public class MainActivity extends Activity {
         try { if (hotspotReservation != null) hotspotReservation.close(); } catch (Exception ignored) {}
         hotspotReservation = null;
         sendExecutor.shutdownNow();
+        try { if (localBridgeServer != null) localBridgeServer.close(); } catch (Exception ignored) {}
+        try { if (localBridgeSocket != null) localBridgeSocket.close(); } catch (Exception ignored) {}
+        localBridgeServer = null;
+        localBridgeSocket = null;
+        localBridgeOut = null;
+        bridgeExecutor.shutdownNow();
         super.onDestroy();
     }
 }
