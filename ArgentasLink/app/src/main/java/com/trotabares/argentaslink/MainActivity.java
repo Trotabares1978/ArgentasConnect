@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.WifiManager;
+import android.net.DhcpInfo;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -46,12 +47,14 @@ public class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private int sent = 0, received = 0;
     private final ExecutorService sendExecutor = Executors.newSingleThreadExecutor();
+    private final Runnable heartbeat = new Runnable() { public void run() { if (!running) return; Socket s=socket; if (s!=null && !s.isClosed()) sendExecutor.execute(() -> sendOnSocket(s,"PING",false)); main.postDelayed(this,4000); } };
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         buildUi();
         wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
         requestWifiPermissionIfNeeded();
+        main.postDelayed(heartbeat,4000);
     }
 
     private TextView label(String text, int size) {
@@ -286,6 +289,8 @@ public class MainActivity extends Activity {
     }
 
     private void discoverTablet() {
+        try { InetAddress gateway=getWifiGateway(); if(gateway!=null){ append("Probando tablet por puerta de enlace: "+gateway.getHostAddress()); tryConnect(gateway,TCP_PORT,1400); if(socket!=null)return; } } catch(Exception e){ append("Prueba directa: "+e.getClass().getSimpleName()); }
+
         try (DatagramSocket ds = new DatagramSocket()) {
             ds.setBroadcast(true);
             ds.setSoTimeout(2500);
@@ -295,6 +300,8 @@ public class MainActivity extends Activity {
 
             for (int i = 0; i < 8 && running && socket == null; i++) {
                 ds.send(request);
+                InetAddress sb=getSubnetBroadcast();
+                if(sb!=null && !sb.getHostAddress().equals("255.255.255.255")) ds.send(new DatagramPacket(msg,msg.length,sb,DISCOVERY_PORT));
                 append("Buscando ArgentasLink... intento " + (i + 1));
                 try {
                     byte[] buf = new byte[256];
@@ -322,12 +329,18 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void tryConnect(InetAddress host, int port) {
+    private InetAddress getWifiGateway() { if(wifi==null)return null; DhcpInfo d=wifi.getDhcpInfo(); if(d==null||d.gateway==0)return null; int g=d.gateway; String ip=(g&255)+"."+((g>>8)&255)+"."+((g>>16)&255)+"."+((g>>24)&255); try{return InetAddress.getByName(ip);}catch(Exception e){return null;} }
+
+    private InetAddress getSubnetBroadcast() { if(wifi==null)return null; DhcpInfo d=wifi.getDhcpInfo(); if(d==null||d.ipAddress==0||d.netmask==0)return null; int b=d.ipAddress|~d.netmask; String ip=(b&255)+"."+((b>>8)&255)+"."+((b>>16)&255)+"."+((b>>24)&255); try{return InetAddress.getByName(ip);}catch(Exception e){return null;} }
+
+    private void tryConnect(InetAddress host, int port) { tryConnect(host,port,5000); }
+
+    private void tryConnect(InetAddress host, int port, int timeoutMs) {
         try {
             append("Conectando por TCP...");
             Socket s = new Socket();
             configureSocket(s);
-            s.connect(new InetSocketAddress(host, port), 5000);
+            s.connect(new InetSocketAddress(host, port), timeoutMs);
             attach(s);
         } catch (Exception e) {
             setStatus("● TABLET NO DISPONIBLE", Color.rgb(255,152,0));
@@ -361,7 +374,7 @@ public class MainActivity extends Activity {
             new Thread(() -> readLoop(s), "ArgentasLink-reader").start();
 
             // El saludo no depende del botón de prueba y se envía sobre el socket recién asociado.
-            sendOnSocket(s, "HELLO|ArgentasLink");
+            sendExecutor.execute(() -> sendOnSocket(s, "HELLO|ArgentasLink", true));
         } catch (Exception e) {
             append("Error al asociar TCP: " + e.getMessage());
             closeSocketIfSame(s);
@@ -378,7 +391,7 @@ public class MainActivity extends Activity {
                 received++;
                 refreshStats();
                 main.post(() -> append("← " + m));
-                if ("PING".equals(m)) sendOnSocket(s, "PONG");
+                if ("PING".equals(m)) sendExecutor.execute(() -> sendOnSocket(s, "PONG", false));
             }
         } catch (Exception e) {
             if (running) append("TCP cerrado: " + e.getClass().getSimpleName() +
@@ -393,7 +406,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void sendOnSocket(Socket s, String message) {
+    private void sendOnSocket(Socket s, String message) { sendOnSocket(s,message,true); }
+
+    private void sendOnSocket(Socket s, String message, boolean showLog) {
         try {
             OutputStream stream;
             synchronized (this) {
@@ -405,9 +420,7 @@ public class MainActivity extends Activity {
             }
             stream.write((message + "\n").getBytes(StandardCharsets.UTF_8));
             stream.flush();
-            sent++;
-            refreshStats();
-            append("→ " + message);
+            if (showLog) { sent++; refreshStats(); append("→ " + message); }
         } catch (Exception e) {
             append("Error enviando '" + message + "': " +
                     e.getClass().getSimpleName() +
@@ -474,6 +487,7 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         running = false;
         serverMode = false;
+        main.removeCallbacks(heartbeat);
         closeSocketOnly();
         closeServerOnly();
         try { if (hotspotReservation != null) hotspotReservation.close(); } catch (Exception ignored) {}
