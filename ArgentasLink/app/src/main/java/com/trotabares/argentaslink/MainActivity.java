@@ -26,6 +26,8 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int TCP_PORT = 45678;
@@ -42,6 +44,7 @@ public class MainActivity extends Activity {
     private TextView status, role, device, stats, network, log;
     private final Handler main = new Handler(Looper.getMainLooper());
     private int sent = 0, received = 0;
+    private final ExecutorService sendExecutor = Executors.newSingleThreadExecutor();
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
@@ -408,7 +411,11 @@ public class MainActivity extends Activity {
             append("⚠ Sin conexión.");
             return;
         }
-        sendOnSocket(s, message);
+        // El botón de prueba se ejecuta en el hilo de UI. Nunca hacemos I/O de red
+        // directamente allí: Android lanza NetworkOnMainThreadException y termina
+        // cerrando el socket. Enviamos por un único hilo dedicado para serializar
+        // los writes y mantener la conexión viva.
+        sendExecutor.execute(() -> sendOnSocket(s, message));
     }
 
     private synchronized void closeSocketIfSame(Socket expected) {
@@ -460,6 +467,7 @@ public class MainActivity extends Activity {
         closeServerOnly();
         try { if (hotspotReservation != null) hotspotReservation.close(); } catch (Exception ignored) {}
         hotspotReservation = null;
+        sendExecutor.shutdownNow();
         super.onDestroy();
     }
 }
