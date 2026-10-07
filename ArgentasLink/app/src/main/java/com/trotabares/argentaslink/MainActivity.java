@@ -326,13 +326,23 @@ public class MainActivity extends Activity {
                 Thread.sleep(700);
             }
             if (socket == null) {
-                setStatus("● TABLET NO ENCONTRADA", Color.rgb(255,152,0));
-                append("No apareció ninguna tablet ArgentasLink.");
+                setStatus("● TABLET NO DISPONIBLE · REINTENTANDO", Color.rgb(255,152,0));
+                append("No apareció ninguna tablet ArgentasLink. Voy a seguir buscando automáticamente.");
+                scheduleClientReconnect(3000);
             }
         } catch (Exception e) {
-            setStatus("● ERROR DE BÚSQUEDA", Color.RED);
+            setStatus("● ERROR DE BÚSQUEDA · REINTENTANDO", Color.RED);
             append("Búsqueda: " + e.getMessage());
+            scheduleClientReconnect(3000);
         }
+    }
+
+    private void scheduleClientReconnect(long delayMs) {
+        main.postDelayed(() -> {
+            if (running && !serverMode && socket == null) {
+                startClientMode();
+            }
+        }, delayMs);
     }
 
     private InetAddress getWifiGateway() { if(wifi==null)return null; DhcpInfo d=wifi.getDhcpInfo(); if(d==null||d.gateway==0)return null; int g=d.gateway; String ip=(g&255)+"."+((g>>8)&255)+"."+((g>>16)&255)+"."+((g>>24)&255); try{return InetAddress.getByName(ip);}catch(Exception e){return null;} }
