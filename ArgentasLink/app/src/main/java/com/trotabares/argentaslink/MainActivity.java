@@ -11,10 +11,12 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -26,15 +28,15 @@ import java.util.UUID;
 
 public class MainActivity extends Activity {
     private static final UUID SERVICE_UUID = UUID.fromString("7c1f3f70-6e7c-4b6f-9a1b-2d3e4f5a6b70");
-    private static final int REQ_BT = 41;
-    private static final int REQ_DISCOVERABLE = 42;
+    private static final int REQ_BT = 41, REQ_DISCOVERABLE = 42;
     private BluetoothAdapter adapter;
     private BluetoothSocket socket;
     private OutputStream out;
     private volatile boolean running = true;
-    private TextView status, role, log;
+    private TextView status, role, device, stats, log;
     private final Handler main = new Handler(Looper.getMainLooper());
     private boolean receiverRegistered = false;
+    private int sent = 0, received = 0;
 
     private final BroadcastReceiver discoveryReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -42,15 +44,13 @@ public class MainActivity extends Activity {
             if (BluetoothDevice.ACTION_FOUND.equals(action)) {
                 BluetoothDevice d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                 if (d != null) {
-                    append("Encontrado: " + safeName(d));
-                    try {
-                        if (d.fetchUuidsWithSdp()) append("Verificando servicio ArgentasLink...");
-                    } catch (Exception e) { append("No se pudo verificar el servicio"); }
+                    append("🔎 Encontrado: " + safeName(d));
+                    try { d.fetchUuidsWithSdp(); } catch (Exception ignored) {}
                 }
             } else if (BluetoothDevice.ACTION_UUID.equals(action)) {
                 BluetoothDevice d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                 if (d != null && hasArgentasLinkService(d)) {
-                    append("✓ ArgentasLink detectado: " + safeName(d));
+                    append("✓ Servicio ArgentasLink encontrado");
                     stopDiscovery();
                     new Thread(() -> tryConnect(d), "ArgentasLink-client").start();
                 }
@@ -62,53 +62,66 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         buildUi();
         adapter = BluetoothAdapter.getDefaultAdapter();
-        if (adapter == null) { setStatus("Bluetooth no disponible"); return; }
+        if (adapter == null) { setStatus("BLUETOOTH NO DISPONIBLE", Color.RED); return; }
         registerReceiver();
         requestPermissionsIfNeeded();
     }
 
+    private TextView label(String text, int size) {
+        TextView t = new TextView(this);
+        t.setText(text); t.setTextSize(size); t.setTextColor(Color.WHITE); t.setPadding(20,12,20,12);
+        return t;
+    }
+
+    private LinearLayout card() {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL); c.setPadding(12,10,12,10);
+        c.setBackgroundColor(Color.rgb(27,34,40));
+        return c;
+    }
+
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(32,32,32,32);
+        root.setOrientation(LinearLayout.VERTICAL); root.setPadding(20,18,20,12);
+        root.setBackgroundColor(Color.rgb(12,15,18));
 
-        TextView title = new TextView(this);
-        title.setText("🍔  ArgentasLink");
-        title.setTextSize(28);
-        title.setGravity(Gravity.CENTER);
-        root.addView(title, new LinearLayout.LayoutParams(-1,90));
+        TextView title = label("🍔  ArgentasLink", 28);
+        title.setGravity(Gravity.CENTER); title.setTextColor(Color.rgb(255,193,7));
+        root.addView(title, new LinearLayout.LayoutParams(-1,70));
 
-        status = new TextView(this);
-        status.setTextSize(21);
-        status.setGravity(Gravity.CENTER);
-        status.setText("● INICIANDO");
-        root.addView(status, new LinearLayout.LayoutParams(-1,100));
+        status = label("● INICIANDO", 21); status.setGravity(Gravity.CENTER);
+        root.addView(status, new LinearLayout.LayoutParams(-1,82));
 
-        role = new TextView(this);
-        role.setTextSize(16);
-        role.setGravity(Gravity.CENTER);
-        role.setText("Elegí qué dispositivo es este");
-        root.addView(role, new LinearLayout.LayoutParams(-1,70));
+        role = label("Elegí el rol de este dispositivo", 17); role.setGravity(Gravity.CENTER);
+        root.addView(role, new LinearLayout.LayoutParams(-1,60));
 
         Button server = new Button(this);
-        server.setText("📡 SOY TABLET / SERVIDOR");
+        server.setText("📡  TABLET · ESPERAR CONEXIÓN");
         server.setOnClickListener(v -> startServerMode());
         root.addView(server);
 
         Button client = new Button(this);
-        client.setText("🔎 SOY CELULAR / CLIENTE");
+        client.setText("🔎  CELULAR · BUSCAR TABLET");
         client.setOnClickListener(v -> startClientMode());
         root.addView(client);
 
+        device = label("Dispositivo: —", 16);
+        stats = label("Enviados: 0    Recibidos: 0", 15);
+        LinearLayout info = card(); info.addView(device); info.addView(stats);
+        root.addView(info, new LinearLayout.LayoutParams(-1,110));
+
         Button ping = new Button(this);
-        ping.setText("Enviar prueba");
+        ping.setText("ENVIAR MENSAJE DE PRUEBA");
         ping.setOnClickListener(v -> send("PING"));
         root.addView(ping);
 
-        log = new TextView(this);
-        log.setTextSize(14);
-        log.setPadding(0,24,0,0);
+        TextView events = label("REGISTRO", 15); events.setTextColor(Color.rgb(255,193,7));
+        root.addView(events);
+
+        log = label("", 13);
+        log.setGravity(Gravity.TOP); log.setBackgroundColor(Color.rgb(18,22,26));
         root.addView(log, new LinearLayout.LayoutParams(-1,0,1));
+
         setContentView(root);
     }
 
@@ -125,26 +138,20 @@ public class MainActivity extends Activity {
     }
 
     @Override public void onRequestPermissionsResult(int r, String[] p, int[] g) {
-        super.onRequestPermissionsResult(r,p,g);
-        if (r == REQ_BT) startReady();
+        super.onRequestPermissionsResult(r,p,g); if (r == REQ_BT) startReady();
     }
 
     private void startReady() {
-        if (!adapter.isEnabled()) {
-            setStatus("● BLUETOOTH APAGADO");
-            append("Activá Bluetooth y volvé a intentar.");
-            return;
-        }
-        setStatus("● LISTO");
-        append("ArgentasLink listo.");
+        if (!adapter.isEnabled()) { setStatus("● BLUETOOTH APAGADO", Color.rgb(255,152,0)); append("Activá Bluetooth."); return; }
+        setStatus("● LISTO", Color.rgb(66,217,107)); append("ArgentasLink listo.");
     }
 
     private void startServerMode() {
         if (!adapter.isEnabled()) return;
         stopDiscovery();
         role.setText("MODO SERVIDOR · TABLET");
-        setStatus("● ESPERANDO CELULAR");
-        append("Iniciando servidor ArgentasLink...");
+        setStatus("● ESPERANDO CELULAR", Color.rgb(66,217,107));
+        append("Tablet visible durante 5 minutos.");
         try {
             Intent i = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
             i.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300);
@@ -162,16 +169,14 @@ public class MainActivity extends Activity {
                 if (s != null) attach(s);
             }
             try { server.close(); } catch(Exception ignored) {}
-        } catch (Exception e) {
-            append("Servidor: " + e.getMessage());
-        }
+        } catch (Exception e) { append("Servidor: " + e.getMessage()); }
     }
 
     private void startClientMode() {
         if (!adapter.isEnabled()) return;
         role.setText("MODO CLIENTE · CELULAR");
-        setStatus("● BUSCANDO ARGENTASLINK");
-        append("Buscando únicamente servicios ArgentasLink...");
+        setStatus("● BUSCANDO ARGENTASLINK", Color.rgb(41,182,246));
+        append("Buscando solamente el servicio ArgentasLink...");
         try {
             if (adapter.isDiscovering()) adapter.cancelDiscovery();
             adapter.startDiscovery();
@@ -191,11 +196,10 @@ public class MainActivity extends Activity {
         try {
             append("Conectando con " + safeName(d) + "...");
             BluetoothSocket s = d.createRfcommSocketToServiceRecord(SERVICE_UUID);
-            s.connect();
-            attach(s);
+            s.connect(); attach(s);
         } catch (Exception e) {
-            append("Conexión fallida: " + e.getMessage());
-            setStatus("● BUSCANDO ARGENTASLINK");
+            append("Conexión fallida; buscando nuevamente...");
+            setStatus("● BUSCANDO ARGENTASLINK", Color.rgb(41,182,246));
             main.postDelayed(this::startClientMode, 1500);
         }
     }
@@ -203,10 +207,10 @@ public class MainActivity extends Activity {
     private synchronized void attach(BluetoothSocket s) {
         try {
             if (socket != null && socket.isConnected()) { s.close(); return; }
-            socket = s;
-            out = s.getOutputStream();
-            setStatus("● CONECTADO");
-            append("✓ CONEXIÓN ARGENTASLINK ESTABLECIDA");
+            socket = s; out = s.getOutputStream();
+            setStatus("● CONECTADO", Color.rgb(66,217,107));
+            append("✓ CONEXIÓN ESTABLECIDA");
+            try { device.setText("Dispositivo: " + safeName(s.getRemoteDevice())); } catch(Exception ignored) {}
             new Thread(() -> readLoop(s), "ArgentasLink-reader").start();
             send("HELLO|ArgentasLink");
         } catch (Exception e) { closeConnection(); }
@@ -217,7 +221,7 @@ public class MainActivity extends Activity {
             BufferedReader r = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
             String line;
             while (running && (line = r.readLine()) != null) {
-                final String m = line;
+                final String m = line; received++; refreshStats();
                 main.post(() -> append("← " + m));
                 if ("PING".equals(m)) send("PONG");
             }
@@ -230,13 +234,9 @@ public class MainActivity extends Activity {
 
     private synchronized void send(String message) {
         try {
-            if (out == null || socket == null || !socket.isConnected()) {
-                append("⚠ Sin conexión");
-                return;
-            }
-            out.write((message + "\n").getBytes(StandardCharsets.UTF_8));
-            out.flush();
-            append("→ " + message);
+            if (out == null || socket == null || !socket.isConnected()) { append("⚠ Sin conexión"); return; }
+            out.write((message + "\n").getBytes(StandardCharsets.UTF_8)); out.flush();
+            sent++; refreshStats(); append("→ " + message);
         } catch(Exception e) { closeConnection(); }
     }
 
@@ -245,33 +245,29 @@ public class MainActivity extends Activity {
     }
 
     private String safeName(BluetoothDevice d) {
-        try { return d.getName() == null ? "dispositivo Bluetooth" : d.getName(); }
-        catch(Exception e) { return "dispositivo Bluetooth"; }
+        try { return d.getName() == null ? "dispositivo Bluetooth" : d.getName(); } catch(Exception e) { return "dispositivo Bluetooth"; }
     }
 
     private synchronized void closeConnection() {
         try { if (socket != null) socket.close(); } catch(Exception ignored) {}
-        socket = null;
-        out = null;
-        setStatus("● DESCONECTADO");
+        socket = null; out = null; setStatus("● DESCONECTADO", Color.rgb(255,82,82));
     }
 
-    private void setStatus(String s) { main.post(() -> status.setText(s)); }
-    private void append(String s) { main.post(() -> log.append(s + "\n")); }
+    private void setStatus(String s, int color) { main.post(() -> { status.setText(s); status.setTextColor(color); }); }
+    private void refreshStats() { main.post(() -> stats.setText("Enviados: " + sent + "    Recibidos: " + received)); }
+    private void append(String s) { main.post(() -> { if (log != null) log.append(s + "\n"); }); }
 
     private void registerReceiver() {
         IntentFilter f = new IntentFilter();
-        f.addAction(BluetoothDevice.ACTION_FOUND);
-        f.addAction(BluetoothDevice.ACTION_UUID);
-        registerReceiver(discoveryReceiver, f);
+        f.addAction(BluetoothDevice.ACTION_FOUND); f.addAction(BluetoothDevice.ACTION_UUID);
+        if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(discoveryReceiver, f, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(discoveryReceiver, f);
         receiverRegistered = true;
     }
 
     @Override protected void onDestroy() {
-        running = false;
-        stopDiscovery();
+        running = false; stopDiscovery();
         if (receiverRegistered) try { unregisterReceiver(discoveryReceiver); } catch(Exception ignored) {}
-        closeConnection();
-        super.onDestroy();
+        closeConnection(); super.onDestroy();
     }
 }
