@@ -52,7 +52,7 @@ public class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private int sent = 0, received = 0;
     private final ExecutorService sendExecutor = Executors.newSingleThreadExecutor();
-    private final Runnable heartbeat = new Runnable() { public void run() { if (!running) return; Socket s=socket; if (s!=null && !s.isClosed()) sendExecutor.execute(() -> sendOnSocket(s,"PING",false)); main.postDelayed(this,4000); } };
+    private final Runnable heartbeat = new Runnable() { public void run() { if (!running) return; Socket s=socket; if (s!=null && !s.isClosed()) { sendExecutor.execute(() -> sendOnSocket(s,"PING",false)); sendLocalBridgeState(true); } else { sendLocalBridgeState(false); } main.postDelayed(this,4000); } };
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
